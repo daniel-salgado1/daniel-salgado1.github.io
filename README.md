@@ -1,1 +1,1 @@
-# nature-vr-environment.html.github.io
+# nature-vr-environment.github.io
