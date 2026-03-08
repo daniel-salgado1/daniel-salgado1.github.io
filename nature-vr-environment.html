@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nature VR — Forest Sanctuary</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/aframe/1.4.2/aframe.min.js"></script>
+  <style>
+    body { margin: 0; background: #000; font-family: 'Georgia', serif; }
+    #loading {
+      position: fixed; inset: 0; background: linear-gradient(135deg, #0a1a0a, #0d2b1a);
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      z-index: 9999; color: #7ec98a; transition: opacity 1s ease;
+    }
+    #loading h1 { font-size: 2.5rem; letter-spacing: 0.3em; margin: 0; color: #a8e6b0; }
+    #loading p { letter-spacing: 0.15em; opacity: 0.7; font-size: 0.9rem; margin-top: 0.5rem; }
+    .loader { width: 60px; height: 60px; border: 3px solid #1a4a2a; border-top: 3px solid #7ec98a;
+      border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 2rem; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #hud {
+      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,20,5,0.85); border: 1px solid #2a5a35; border-radius: 12px;
+      padding: 12px 24px; color: #7ec98a; font-size: 0.78rem; letter-spacing: 0.12em;
+      display: flex; gap: 24px; z-index: 100; backdrop-filter: blur(8px);
+    }
+    .hud-item { display: flex; align-items: center; gap: 8px; }
+    .hud-dot { width: 8px; height: 8px; border-radius: 50%; background: #7ec98a; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  </style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="loader"></div>
+  <h1>FOREST SANCTUARY</h1>
+  <p>WebXR Nature Environment · Meta Quest Pro</p>
+</div>
+
+<div id="hud">
+  <div class="hud-item"><div class="hud-dot"></div> TRIGGER — Grab Objects</div>
+  <div class="hud-item"><div class="hud-dot" style="animation-delay:0.5s"></div> THUMBSTICK — Move</div>
+  <div class="hud-item"><div class="hud-dot" style="animation-delay:1s"></div> A BUTTON — Teleport</div>
+  <div class="hud-item"><div class="hud-dot" style="animation-delay:1.5s"></div> B BUTTON — Day/Night</div>
+</div>
+
+<a-scene
+  id="main-scene"
+  renderer="antialias: true; colorManagement: true; physicallyCorrectLights: true; toneMapping: ACESFilmic;"
+  shadow="type: pcfsoft; autoUpdate: true"
+  vr-mode-ui="enabled: true"
+  loading-screen="enabled: false"
+  fog="type: exponential; color: #a8c8a0; density: 0.018">
+
+  <!-- ASSETS -->
+  <a-assets timeout="10000">
+    <!-- Procedural textures defined inline -->
+  </a-assets>
+
+  <!-- === CUSTOM COMPONENTS === -->
+  <script>
+    // Day/Night toggle
+    AFRAME.registerComponent('daynight-cycle', {
+      schema: { isDay: { default: true } },
+      init() {
+        this.toggleCycle = this.toggleCycle.bind(this);
+        window.addEventListener('daynight-toggle', this.toggleCycle);
+      },
+      toggleCycle() {
+        this.data.isDay = !this.data.isDay;
+        const sky = document.querySelector('#sky');
+        const sun = document.querySelector('#sun');
+        const ambient = document.querySelector('#ambient-light');
+        const dirLight = document.querySelector('#dir-light');
+        if (this.data.isDay) {
+          sky.setAttribute('color', '#87CEEB');
+          sun.setAttribute('color', '#FFF8DC');
+          sun.setAttribute('position', '200 300 -200');
+          ambient.setAttribute('light', 'intensity: 0.6; color: #e8f4e8');
+          dirLight.setAttribute('light', 'intensity: 1.2; color: #FFF5E0');
+        } else {
+          sky.setAttribute('color', '#050d1a');
+          sun.setAttribute('color', '#4466aa');
+          sun.setAttribute('position', '-200 100 -300');
+          ambient.setAttribute('light', 'intensity: 0.1; color: #1a2040');
+          dirLight.setAttribute('light', 'intensity: 0.3; color: #6688cc');
+        }
+      }
+    });
+
+    // Sway animation for trees/grass
+    AFRAME.registerComponent('wind-sway', {
+      schema: { speed: { default: 1 }, amount: { default: 2 } },
+      init() {
+        this.offset = Math.random() * Math.PI * 2;
+        this.origRot = this.el.getAttribute('rotation') || { x: 0, y: 0, z: 0 };
+      },
+      tick(t) {
+        const sway = Math.sin(t * 0.001 * this.data.speed + this.offset) * this.data.amount;
+        this.el.setAttribute('rotation', {
+          x: this.origRot.x,
+          y: this.origRot.y,
+          z: this.origRot.z + sway
+        });
+      }
+    });
+
+    // Grabbable objects
+    AFRAME.registerComponent('grabbable', {
+      init() {
+        this.el.addEventListener('mousedown', () => {
+          this.el.setAttribute('material', 'emissive', '#336633');
+          this.el.setAttribute('material', 'emissiveIntensity', 0.4);
+        });
+        this.el.addEventListener('mouseup', () => {
+          this.el.setAttribute('material', 'emissive', '#000000');
+          this.el.setAttribute('material', 'emissiveIntensity', 0);
+        });
+      }
+    });
+
+    // Firefly particle
+    AFRAME.registerComponent('firefly', {
+      schema: { radius: { default: 5 } },
+      init() {
+        this.angle = Math.random() * Math.PI * 2;
+        this.height = 1.5 + Math.random() * 2;
+        this.speed = 0.3 + Math.random() * 0.4;
+        this.cx = (Math.random() - 0.5) * 20;
+        this.cz = (Math.random() - 0.5) * 20;
+        this.blinkOffset = Math.random() * Math.PI * 2;
+      },
+      tick(t) {
+        this.angle += this.speed * 0.001;
+        const x = this.cx + Math.cos(this.angle) * this.data.radius * 0.5;
+        const z = this.cz + Math.sin(this.angle) * this.data.radius * 0.5;
+        const y = this.height + Math.sin(t * 0.002 + this.blinkOffset) * 0.5;
+        const blink = (Math.sin(t * 0.003 + this.blinkOffset) + 1) / 2;
+        this.el.setAttribute('position', { x, y, z });
+        this.el.setAttribute('material', 'opacity', blink * 0.9 + 0.1);
+      }
+    });
+
+    // Water ripple
+    AFRAME.registerComponent('water-ripple', {
+      tick(t) {
+        const scale = 1 + Math.sin(t * 0.001) * 0.005;
+        this.el.setAttribute('scale', `${scale} 1 ${scale}`);
+      }
+    });
+
+    // Button B mapping for day/night
+    AFRAME.registerComponent('controller-daynight', {
+      init() {
+        this.el.addEventListener('bbuttondown', () => {
+          window.dispatchEvent(new Event('daynight-toggle'));
+        });
+      }
+    });
+
+    // Teleport on A button
+    AFRAME.registerComponent('teleport-on-a', {
+      init() {
+        this.el.addEventListener('abuttondown', () => {
+          const rig = document.querySelector('#rig');
+          const spots = [
+            { x: 0, y: 0, z: 0 },
+            { x: 15, y: 0, z: -10 },
+            { x: -12, y: 0, z: 8 },
+            { x: 5, y: 0, z: 18 },
+          ];
+          const spot = spots[Math.floor(Math.random() * spots.length)];
+          rig.setAttribute('position', spot);
+        });
+      }
+    });
+
+    // Hide loading screen once scene loads
+    document.addEventListener('DOMContentLoaded', () => {
+      const scene = document.querySelector('a-scene');
+      scene.addEventListener('loaded', () => {
+        setTimeout(() => {
+          const loading = document.getElementById('loading');
+          loading.style.opacity = '0';
+          setTimeout(() => loading.style.display = 'none', 1000);
+        }, 500);
+      });
+    });
+  </script>
+
+  <!-- === CAMERA RIG === -->
+  <a-entity id="rig" position="0 0 5">
+    <a-camera id="camera" look-controls="pointerLockEnabled: false" wasd-controls="enabled: false">
+      <a-cursor color="#7ec98a" fuse="false" raycaster="objects: .interactive" />
+    </a-camera>
+
+    <!-- Left Controller -->
+    <a-entity
+      id="left-hand"
+      oculus-touch-controls="hand: left"
+      laser-controls="hand: left"
+      raycaster="objects: .interactive; showLine: true; lineColor: #7ec98a; lineOpacity: 0.5">
+    </a-entity>
+
+    <!-- Right Controller -->
+    <a-entity
+      id="right-hand"
+      oculus-touch-controls="hand: right"
+      laser-controls="hand: right"
+      raycaster="objects: .interactive; showLine: true; lineColor: #7ec98a; lineOpacity: 0.5"
+      controller-daynight
+      teleport-on-a>
+    </a-entity>
+
+    <!-- Movement via left thumbstick -->
+    <a-entity movement-controls="fly: false; speed: 0.15; constrainToNavMesh: false">
+    </a-entity>
+  </a-entity>
+
+  <!-- === SKY === -->
+  <a-sky id="sky" color="#87CEEB"></a-sky>
+
+  <!-- Clouds -->
+  <a-entity position="0 40 -80">
+    <a-sphere position="0 0 0" radius="8" color="#ffffff" opacity="0.6" segments-height="8" segments-width="8" material="fog: false; transparent: true"></a-sphere>
+    <a-sphere position="8 -2 0" radius="6" color="#ffffff" opacity="0.5" segments-height="8" segments-width="8" material="fog: false; transparent: true"></a-sphere>
+    <a-sphere position="-7 -1 2" radius="5" color="#ffffff" opacity="0.55" segments-height="8" segments-width="8" material="fog: false; transparent: true"></a-sphere>
+  </a-entity>
+  <a-entity position="-40 35 -60">
+    <a-sphere position="0 0 0" radius="7" color="#f0f8ff" opacity="0.5" segments-height="8" segments-width="8" material="fog: false; transparent: true"></a-sphere>
+    <a-sphere position="7 -2 0" radius="5" color="#f0f8ff" opacity="0.4" segments-height="8" segments-width="8" material="fog: false; transparent: true"></a-sphere>
+  </a-entity>
+  <a-entity position="50 38 -50">
+    <a-sphere position="0 0 0" radius="9" color="#ffffff" opacity="0.45" segments-height="8" segments-width="8" material="fog: false; transparent: true"></a-sphere>
+    <a-sphere position="-8 -3 0" radius="6" color="#ffffff" opacity="0.4" segments-height="8" segments-width="8" material="fog: false; transparent: true"></a-sphere>
+  </a-entity>
+
+  <!-- === LIGHTING === -->
+  <a-entity id="ambient-light" light="type: ambient; intensity: 0.6; color: #e8f4e8"></a-entity>
+  <a-entity id="dir-light" light="type: directional; intensity: 1.2; color: #FFF5E0; castShadow: true; shadowMapWidth: 2048; shadowMapHeight: 2048; shadowCameraFar: 200; shadowCameraLeft: -50; shadowCameraRight: 50; shadowCameraTop: 50; shadowCameraBottom: -50" position="1 3 -1" daynight-cycle></a-entity>
+
+  <!-- Sun / Moon -->
+  <a-sphere id="sun" radius="4" position="200 300 -200" color="#FFF8DC" material="shader: flat; color: #FFF8DC; emissive: #FFF8DC; emissiveIntensity: 1; fog: false"></a-sphere>
+  <a-entity light="type: point; color: #FFF8C0; intensity: 0.4; distance: 500" position="200 300 -200"></a-entity>
+
+  <!-- === TERRAIN (Ground layers) === -->
+  <!-- Main ground -->
+  <a-plane
+    position="0 0 0"
+    rotation="-90 0 0"
+    width="200" height="200"
+    color="#3d6b3d"
+    material="roughness: 0.95; metalness: 0; color: #3a6b30; repeat: 20 20"
+    shadow="receive: true">
+  </a-plane>
+
+  <!-- Grass patches -->
+  <a-plane position="0 0.01 0" rotation="-90 0 0" width="40" height="40" color="#4a7a3a" material="roughness: 1; opacity: 0.8; transparent: true"></a-plane>
+  <a-plane position="-15 0.01 -5" rotation="-90 0 0" width="25" height="20" color="#567a42" material="roughness: 1; opacity: 0.7; transparent: true"></a-plane>
+  <a-plane position="12 0.01 -8" rotation="-90 0 0" width="20" height="15" color="#4e7238" material="roughness: 1; opacity: 0.75; transparent: true"></a-plane>
+
+  <!-- Dirt path -->
+  <a-plane position="0 0.02 8" rotation="-90 0 0" width="3" height="30" color="#8B6914" material="roughness: 0.9; opacity: 0.9; transparent: true"></a-plane>
+  <a-plane position="8 0.02 -8" rotation="-90 15 0" width="3" height="25" color="#8B6914" material="roughness: 0.9; opacity: 0.85; transparent: true"></a-plane>
+
+  <!-- === TREES === -->
+  <!-- Tree macro: trunk + canopy layers -->
+  <!-- Tree 1 -->
+  <a-entity position="8 0 -12">
+    <a-cylinder height="4" radius="0.25" color="#5a3a1a" material="roughness: 0.95" shadow="cast: true; receive: true" wind-sway="speed: 0.7; amount: 0.3"></a-cylinder>
+    <a-sphere position="0 4 0" radius="3.5" color="#2d6b2d" material="roughness: 0.9" shadow="cast: true" wind-sway="speed: 0.8; amount: 1.5" segments-height="12" segments-width="12"></a-sphere>
+    <a-sphere position="0.5 5.5 0" radius="2.5" color="#357535" material="roughness: 0.9" shadow="cast: true" wind-sway="speed: 0.9; amount: 1.2" segments-height="10" segments-width="10"></a-sphere>
+    <a-sphere position="-0.3 6.5 0.3" radius="1.8" color="#3d853d" material="roughness: 0.9" wind-sway="speed: 1; amount: 1" segments-height="8" segments-width="8"></a-sphere>
+  </a-entity>
+
+  <!-- Tree 2 -->
+  <a-entity position="-10 0 -8">
+    <a-cylinder height="5" radius="0.3" color="#4a2e10" material="roughness: 0.95" shadow="cast: true; receive: true" wind-sway="speed: 0.6; amount: 0.3"></a-cylinder>
+    <a-sphere position="0 5 0" radius="4" color="#255525" material="roughness: 0.9" shadow="cast: true" wind-sway="speed: 0.75; amount: 1.8" segments-height="12" segments-width="12"></a-sphere>
+    <a-sphere position="-0.5 6.8 0" radius="3" color="#2e6b2e" material="roughness: 0.9" wind-sway="speed: 0.85; amount: 1.5" segments-height="10" segments-width="10"></a-sphere>
+    <a-sphere position="0.3 8 -0.2" radius="2" color="#378a37" material="roughness: 0.9" wind-sway="speed: 0.95; amount: 1.2" segments-height="8" segments-width="8"></a-sphere>
+  </a-entity>
+
+  <!-- Tree 3 (Pine) -->
+  <a-entity position="14 0 -5">
+    <a-cylinder height="6" radius="0.2" color="#5a3a1a" material="roughness: 0.95" shadow="cast: true; receive: true"></a-cylinder>
+    <a-cone position="0 4 0" radius-bottom="3.5" height="3" color="#1a5c1a" material="roughness: 0.9" shadow="cast: true" wind-sway="speed: 0.6; amount: 0.8"></a-cone>
+    <a-cone position="0 6 0" radius-bottom="2.8" height="3" color="#1d6a1d" material="roughness: 0.9" shadow="cast: true" wind-sway="speed: 0.7; amount: 1"></a-cone>
+    <a-cone position="0 8 0" radius-bottom="2" height="3" color="#236a23" material="roughness: 0.9" wind-sway="speed: 0.8; amount: 1.2"></a-cone>
+    <a-cone position="0 9.5 0" radius-bottom="1.2" height="2.5" color="#2a782a" material="roughness: 0.9" wind-sway="speed: 0.9; amount: 1.4"></a-cone>
+  </a-entity>
+
+  <!-- Tree 4 -->
+  <a-entity position="-6 0 -18">
+    <a-cylinder height="3.5" radius="0.22" color="#6b4520" material="roughness: 0.95" shadow="cast: true; receive: true" wind-sway="speed: 0.65; amount: 0.3"></a-cylinder>
+    <a-sphere position="0 3.5 0" radius="3" color="#2d7030" material="roughness: 0.9" shadow="cast: true" wind-sway="speed: 0.8; amount: 1.5" segments-height="12" segments-width="12"></a-sphere>
+    <a-sphere position="0.4 5 0" radius="2.2" color="#357835" material="roughness: 0.9" wind-sway="speed: 0.9; amount: 1.2" segments-height="10" segments-width="10"></a-sphere>
+  </a-entity>
+
+  <!-- Tree 5 (background) -->
+  <a-entity position="20 0 -20">
+    <a-cylinder height="6" radius="0.35" color="#4a3010" material="roughness: 0.95" shadow="cast: true; receive: true" wind-sway="speed: 0.55; amount: 0.25"></a-cylinder>
+    <a-sphere position="0 6 0" radius="5" color="#1e5c1e" material="roughness: 0.9" shadow="cast: true" wind-sway="speed: 0.7; amount: 2" segments-height="12" segments-width="12"></a-sphere>
+    <a-sphere position="-0.8 8 0" radius="3.5" color="#267026" material="roughness: 0.9" wind-sway="speed: 0.8; amount: 1.8" segments-height="10" segments-width="10"></a-sphere>
+    <a-sphere position="0.5 9.5 0.5" radius="2.5" color="#2e802e" material="roughness: 0.9" wind-sway="speed: 0.9; amount: 1.5" segments-height="8" segments-width="8"></a-sphere>
+  </a-entity>
+
+  <!-- Tree 6 -->
+  <a-entity position="-18 0 -15">
+    <a-cylinder height="5" radius="0.28" color="#5c3818" material="roughness: 0.95" shadow="cast: true; receive: true" wind-sway="speed: 0.62; amount: 0.28"></a-cylinder>
+    <a-sphere position="0 5 0" radius="4.5" color="#204a20" material="roughness: 0.9" shadow="cast: true" wind-sway="speed: 0.72; amount: 2" segments-height="12" segments-width="12"></a-sphere>
+    <a-sphere position="0.6 7 0" radius="3.2" color="#286028" material="roughness: 0.9" wind-sway="speed: 0.82; amount: 1.7" segments-height="10" segments-width="10"></a-sphere>
+  </a-entity>
+
+  <!-- Background forest wall -->
+  <a-entity position="-30 0 -35">
+    <a-box width="60" height="18" depth="5" color="#1a4020" material="roughness: 1; opacity: 0.9; transparent: true"></a-box>
+    <a-box position="0 9 0" width="65" height="12" depth="3" color="#225025" material="roughness: 1; opacity: 0.7; transparent: true"></a-box>
+  </a-entity>
+  <a-entity position="25 0 -38">
+    <a-box width="50" height="16" depth="4" color="#1c4520" material="roughness: 1; opacity: 0.85; transparent: true"></a-box>
+  </a-entity>
+
+  <!-- === WATER / POND === -->
+  <a-entity position="-5 0.02 5">
+    <!-- Pond bed -->
+    <a-ellipse radius="4" color="#1a4a5a" rotation="-90 0 0" material="roughness: 0.1; metalness: 0.5; opacity: 0.85; transparent: true" water-ripple></a-ellipse>
+    <!-- Pond rim -->
+    <a-torus radius="4.1" radius-tubular="0.15" color="#5a4a2a" rotation="-90 0 0" material="roughness: 0.9"></a-torus>
+    <!-- Water shimmer -->
+    <a-ellipse radius="3.8" color="#3a8aaa" rotation="-90 0 0" position="0 0.02 0" material="opacity: 0.3; transparent: true; metalness: 0.8; roughness: 0.05" water-ripple></a-ellipse>
+    <!-- Lily pads -->
+    <a-ellipse radius="0.4" color="#3a7a30" rotation="-90 15 0" position="1.5 0.05 1" material="roughness: 0.8; opacity: 0.9; transparent: true"></a-ellipse>
+    <a-ellipse radius="0.35" color="#427838" rotation="-90 -20 0" position="-1.2 0.05 1.5" material="roughness: 0.8; opacity: 0.9; transparent: true"></a-ellipse>
+    <a-ellipse radius="0.3" color="#3d7535" rotation="-90 40 0" position="0.5 0.05 -1.8" material="roughness: 0.8; opacity: 0.9; transparent: true"></a-ellipse>
+    <!-- Water light -->
+    <a-entity light="type: point; color: #4aaccc; intensity: 0.4; distance: 8" position="0 1 0"></a-entity>
+  </a-entity>
+
+  <!-- === ROCKS === -->
+  <a-entity position="3 0.3 4" class="interactive" grabbable>
+    <a-sphere radius="0.5" color="#7a7060" material="roughness: 0.95; metalness: 0.05" shadow="cast: true; receive: true" scale="1.2 0.7 1"></a-sphere>
+  </a-entity>
+  <a-entity position="-8 0.2 3" class="interactive" grabbable>
+    <a-sphere radius="0.35" color="#6a6055" material="roughness: 0.95" shadow="cast: true; receive: true" scale="1.3 0.65 1.1"></a-sphere>
+  </a-entity>
+  <a-entity position="5 0.4 -3" class="interactive" grabbable>
+    <a-sphere radius="0.6" color="#857a6a" material="roughness: 0.9" shadow="cast: true; receive: true" scale="1.1 0.75 0.9"></a-sphere>
+  </a-entity>
+  <!-- Rock cluster near pond -->
+  <a-sphere position="-9 0.25 4" radius="0.4" color="#706860" material="roughness: 0.95" shadow="cast: true; receive: true" scale="1.2 0.7 1"></a-sphere>
+  <a-sphere position="-9.5 0.15 5" radius="0.28" color="#787068" material="roughness: 0.95" shadow="cast: true; receive: true" scale="1.1 0.6 1"></a-sphere>
+  <a-sphere position="-8.5 0.2 5.5" radius="0.35" color="#6a6258" material="roughness: 0.95" shadow="cast: true; receive: true" scale="1.3 0.65 1.1"></a-sphere>
+
+  <!-- === FLOWERS === -->
+  <!-- Red flower -->
+  <a-entity position="2 0 2" class="interactive" grabbable>
+    <a-cylinder height="0.6" radius="0.03" color="#3a7a3a" position="0 0.3 0" material="roughness: 0.8"></a-cylinder>
+    <a-sphere radius="0.12" color="#e8352a" position="0 0.65 0" material="roughness: 0.6; emissive: #cc2a20; emissiveIntensity: 0.2" wind-sway="speed: 1.2; amount: 3"></a-sphere>
+    <a-sphere radius="0.08" color="#ffee00" position="0 0.65 0" material="roughness: 0.5; emissive: #ddcc00; emissiveIntensity: 0.3"></a-sphere>
+  </a-entity>
+
+  <!-- Yellow flower -->
+  <a-entity position="3.5 0 3" class="interactive" grabbable>
+    <a-cylinder height="0.7" radius="0.03" color="#3a7a3a" position="0 0.35 0" material="roughness: 0.8"></a-cylinder>
+    <a-sphere radius="0.13" color="#f5d020" position="0 0.75 0" material="roughness: 0.6; emissive: #d4b010; emissiveIntensity: 0.25" wind-sway="speed: 1; amount: 3.5"></a-sphere>
+    <a-sphere radius="0.07" color="#cc7700" position="0 0.75 0" material="roughness: 0.5"></a-sphere>
+  </a-entity>
+
+  <!-- Purple flower -->
+  <a-entity position="-3 0 6" class="interactive" grabbable>
+    <a-cylinder height="0.55" radius="0.03" color="#3d6e3d" position="0 0.27 0" material="roughness: 0.8"></a-cylinder>
+    <a-sphere radius="0.11" color="#9b50cc" position="0 0.58 0" material="roughness: 0.6; emissive: #7a35aa; emissiveIntensity: 0.2" wind-sway="speed: 1.3; amount: 3"></a-sphere>
+    <a-sphere radius="0.06" color="#ffee88" position="0 0.58 0" material="roughness: 0.5"></a-sphere>
+  </a-entity>
+
+  <!-- White flower cluster -->
+  <a-entity position="6 0 6" class="interactive" grabbable>
+    <a-cylinder height="0.5" radius="0.03" color="#3a7a3a" position="0 0.25 0" material="roughness: 0.8"></a-cylinder>
+    <a-sphere radius="0.1" color="#f8f8f5" position="0 0.55 0" material="roughness: 0.7; emissive: #e8e8e0; emissiveIntensity: 0.15" wind-sway="speed: 1.1; amount: 2.8"></a-sphere>
+    <a-sphere radius="0.06" color="#f5d030" position="0 0.55 0" material="roughness: 0.5"></a-sphere>
+  </a-entity>
+
+  <!-- More flower variety -->
+  <a-entity position="-2 0 3.5">
+    <a-cylinder height="0.65" radius="0.025" color="#4a8040" position="0 0.32 0" material="roughness: 0.8"></a-cylinder>
+    <a-sphere radius="0.09" color="#ff6688" position="0 0.68 0" material="roughness: 0.6; emissive: #e05068; emissiveIntensity: 0.2" wind-sway="speed: 1.4; amount: 4"></a-sphere>
+  </a-entity>
+  <a-entity position="4 0 1">
+    <a-cylinder height="0.58" radius="0.025" color="#3d7535" position="0 0.29 0" material="roughness: 0.8"></a-cylinder>
+    <a-sphere radius="0.1" color="#ee8822" position="0 0.62 0" material="roughness: 0.6; emissive: #cc6810; emissiveIntensity: 0.2" wind-sway="speed: 0.9; amount: 3"></a-sphere>
+  </a-entity>
+
+  <!-- === FERNS / BUSHES === -->
+  <a-sphere position="10 0.4 2" radius="0.7" color="#2a6a28" material="roughness: 0.95" scale="1.4 0.8 1.2" wind-sway="speed: 0.8; amount: 1.5"></a-sphere>
+  <a-sphere position="9.2 0.35 2.8" radius="0.55" color="#337a32" material="roughness: 0.95" scale="1.2 0.7 1" wind-sway="speed: 0.9; amount: 1.3"></a-sphere>
+  <a-sphere position="-7 0.35 7" radius="0.6" color="#286828" material="roughness: 0.95" scale="1.5 0.7 1.3" wind-sway="speed: 0.75; amount: 1.4"></a-sphere>
+  <a-sphere position="-6 0.3 7.8" radius="0.5" color="#307830" material="roughness: 0.95" scale="1.3 0.65 1.1" wind-sway="speed: 0.85; amount: 1.2"></a-sphere>
+  <!-- Bush near pond -->
+  <a-sphere position="-9 0.5 2" radius="0.85" color="#256025" material="roughness: 0.95" scale="1.3 0.75 1.2" wind-sway="speed: 0.7; amount: 1.6"></a-sphere>
+  <a-sphere position="-8 0.4 1.5" radius="0.6" color="#2d6e2d" material="roughness: 0.95" scale="1.2 0.7 1" wind-sway="speed: 0.8; amount: 1.3"></a-sphere>
+
+  <!-- === MUSHROOMS === -->
+  <a-entity position="7 0 3.5" class="interactive" grabbable>
+    <a-cylinder height="0.3" radius="0.08" color="#d4c4a0" material="roughness: 0.8"></a-cylinder>
+    <a-sphere position="0 0.32 0" radius="0.22" color="#cc4422" material="roughness: 0.7; emissive: #aa3318; emissiveIntensity: 0.1" scale="1 0.6 1"></a-sphere>
+  </a-entity>
+  <a-entity position="7.3 0 3.2" class="interactive" grabbable>
+    <a-cylinder height="0.22" radius="0.06" color="#c8b898" material="roughness: 0.8"></a-cylinder>
+    <a-sphere position="0 0.24 0" radius="0.16" color="#dd5533" material="roughness: 0.7" scale="1 0.6 1"></a-sphere>
+  </a-entity>
+  <a-entity position="6.8 0 3.8">
+    <a-cylinder height="0.18" radius="0.05" color="#c0b090" material="roughness: 0.8"></a-cylinder>
+    <a-sphere position="0 0.2 0" radius="0.13" color="#e86644" material="roughness: 0.7" scale="1 0.55 1"></a-sphere>
+  </a-entity>
+
+  <!-- === LOG === -->
+  <a-entity position="-4 0.15 -3" rotation="0 35 0">
+    <a-cylinder height="4" radius="0.3" color="#6b4520" material="roughness: 0.95" rotation="0 0 90" shadow="cast: true; receive: true"></a-cylinder>
+    <!-- Moss on log -->
+    <a-cylinder height="2" radius="0.32" color="#3a7a30" material="roughness: 0.95; opacity: 0.6; transparent: true" rotation="0 0 90" position="0.5 0.05 0"></a-cylinder>
+  </a-entity>
+
+  <!-- === GRASS BLADES (stylized) === -->
+  <!-- Grass tufts scattered around -->
+  <a-entity position="1 0 2">
+    <a-plane width="0.08" height="0.5" color="#4a8a38" rotation="0 20 -10" position="0 0.25 0" material="side: double; roughness: 0.8" wind-sway="speed: 1.5; amount: 5"></a-plane>
+    <a-plane width="0.07" height="0.45" color="#529040" rotation="0 80 5" position="0.05 0.22 0" material="side: double; roughness: 0.8" wind-sway="speed: 1.6; amount: 4.5"></a-plane>
+    <a-plane width="0.06" height="0.4" color="#3a7a30" rotation="0 140 -8" position="-0.03 0.2 0.03" material="side: double; roughness: 0.8" wind-sway="speed: 1.4; amount: 5.5"></a-plane>
+  </a-entity>
+  <a-entity position="-1.5 0 1.5">
+    <a-plane width="0.08" height="0.55" color="#4d8a3a" rotation="0 30 -12" position="0 0.27 0" material="side: double; roughness: 0.8" wind-sway="speed: 1.5; amount: 5"></a-plane>
+    <a-plane width="0.07" height="0.48" color="#578540" rotation="0 95 8" position="0.04 0.24 0" material="side: double; roughness: 0.8" wind-sway="speed: 1.7; amount: 4"></a-plane>
+  </a-entity>
+  <a-entity position="0.5 0 -1">
+    <a-plane width="0.07" height="0.45" color="#488038" rotation="0 15 -8" position="0 0.22 0" material="side: double; roughness: 0.8" wind-sway="speed: 1.3; amount: 5"></a-plane>
+    <a-plane width="0.06" height="0.4" color="#50883e" rotation="0 75 5" position="0.04 0.2 0" material="side: double; roughness: 0.8" wind-sway="speed: 1.6; amount: 4.5"></a-plane>
+  </a-entity>
+
+  <!-- === FIREFLIES (evening ambiance) === -->
+  <a-sphere radius="0.04" color="#ddff44" material="emissive: #ccee00; emissiveIntensity: 1; opacity: 0.8; transparent: true; fog: false; shader: flat" firefly="radius: 6"></a-sphere>
+  <a-sphere radius="0.035" color="#eeff66" material="emissive: #ddee22; emissiveIntensity: 1; opacity: 0.7; transparent: true; fog: false; shader: flat" firefly="radius: 4"></a-sphere>
+  <a-sphere radius="0.04" color="#ccff55" material="emissive: #bbee11; emissiveIntensity: 1; opacity: 0.75; transparent: true; fog: false; shader: flat" firefly="radius: 7"></a-sphere>
+  <a-sphere radius="0.03" color="#eeff44" material="emissive: #ddee00; emissiveIntensity: 1; opacity: 0.6; transparent: true; fog: false; shader: flat" firefly="radius: 5"></a-sphere>
+  <a-sphere radius="0.035" color="#d8ff50" material="emissive: #c8ee10; emissiveIntensity: 1; opacity: 0.65; transparent: true; fog: false; shader: flat" firefly="radius: 8"></a-sphere>
+  <a-sphere radius="0.04" color="#e5ff48" material="emissive: #d4ee08; emissiveIntensity: 1; opacity: 0.8; transparent: true; fog: false; shader: flat" firefly="radius: 3"></a-sphere>
+
+  <!-- === BIRDS (distant) === -->
+  <a-entity id="birds" position="30 25 -40">
+    <a-entity rotation="0 0 0" animation="property: rotation; to: 0 360 0; loop: true; dur: 12000; easing: linear">
+      <a-plane width="0.8" height="0.15" color="#2a2020" material="side: double; opacity: 0.6; transparent: true" position="3 0 0" rotation="0 0 20"></a-plane>
+      <a-plane width="0.8" height="0.15" color="#2a2020" material="side: double; opacity: 0.6; transparent: true" position="5 0.3 0" rotation="0 0 15"></a-plane>
+      <a-plane width="0.7" height="0.12" color="#252020" material="side: double; opacity: 0.5; transparent: true" position="1.5 -0.5 0" rotation="0 0 25"></a-plane>
+    </a-entity>
+  </a-entity>
+
+  <!-- === CAMPFIRE (interactive) === -->
+  <a-entity position="0 0 2" class="interactive" grabbable>
+    <!-- Log base -->
+    <a-cylinder height="0.8" radius="0.08" color="#5a3510" material="roughness: 0.95" rotation="0 30 90" position="-0.2 0.08 0"></a-cylinder>
+    <a-cylinder height="0.8" radius="0.08" color="#4a2e0e" material="roughness: 0.95" rotation="0 -20 90" position="0.2 0.08 0"></a-cylinder>
+    <!-- Stone ring -->
+    <a-torus radius="0.4" radius-tubular="0.07" color="#6a6050" material="roughness: 0.95" rotation="-90 0 0" position="0 0.05 0" segments-radial="8"></a-torus>
+    <!-- Flame core -->
+    <a-cone position="0 0.4 0" radius-bottom="0.15" height="0.5" color="#ff6600" material="opacity: 0.85; transparent: true; emissive: #ee4400; emissiveIntensity: 0.8; side: double; shader: flat" animation="property: scale; from: 0.9 0.9 0.9; to: 1.1 1.3 1.1; loop: true; dur: 400; easing: easeInOutSine; dir: alternate"></a-cone>
+    <a-cone position="0 0.55 0" radius-bottom="0.1" height="0.4" color="#ffaa00" material="opacity: 0.75; transparent: true; emissive: #ff8800; emissiveIntensity: 0.9; side: double; shader: flat" animation="property: scale; from: 1.1 1 1.1; to: 0.9 1.2 0.9; loop: true; dur: 350; easing: easeInOutSine; dir: alternate"></a-cone>
+    <a-cone position="0 0.65 0" radius-bottom="0.06" height="0.3" color="#ffee44" material="opacity: 0.6; transparent: true; emissive: #ffcc00; emissiveIntensity: 1; side: double; shader: flat" animation="property: scale; from: 0.8 1.1 0.8; to: 1.2 0.9 1.2; loop: true; dur: 300; easing: easeInOutSine; dir: alternate"></a-cone>
+    <!-- Fire light -->
+    <a-entity light="type: point; color: #ff7700; intensity: 1.5; distance: 10" position="0 0.6 0"
+      animation="property: light.intensity; from: 1.2; to: 1.8; loop: true; dur: 400; easing: easeInOutSine; dir: alternate">
+    </a-entity>
+  </a-entity>
+
+  <!-- Sitting logs around campfire -->
+  <a-cylinder position="2 0.25 2" height="0.5" radius="0.25" color="#5a3a15" material="roughness: 0.95" rotation="0 30 0" shadow="cast: true; receive: true"></a-cylinder>
+  <a-cylinder position="-2 0.25 2.5" height="0.5" radius="0.25" color="#4a3010" material="roughness: 0.95" rotation="0 -20 0" shadow="cast: true; receive: true"></a-cylinder>
+  <a-cylinder position="0.5 0.25 3.5" height="0.5" radius="0.22" color="#5c3c18" material="roughness: 0.95" rotation="0 10 0" shadow="cast: true; receive: true"></a-cylinder>
+
+  <!-- === DISTANT MOUNTAINS === -->
+  <a-entity position="-60 0 -100">
+    <a-cone radius-bottom="40" height="55" color="#4a6a4a" material="roughness: 1; opacity: 0.7; transparent: true" segments-radial="6"></a-cone>
+  </a-entity>
+  <a-entity position="0 0 -120">
+    <a-cone radius-bottom="50" height="70" color="#3d5a3d" material="roughness: 1; opacity: 0.6; transparent: true" segments-radial="6"></a-cone>
+  </a-entity>
+  <a-entity position="70 0 -90">
+    <a-cone radius-bottom="35" height="50" color="#4a6540" material="roughness: 1; opacity: 0.65; transparent: true" segments-radial="6"></a-cone>
+  </a-entity>
+  <!-- Snow caps -->
+  <a-entity position="-60 52 -100">
+    <a-cone radius-bottom="10" height="15" color="#f0f0f5" material="roughness: 0.9; opacity: 0.8; transparent: true" segments-radial="6"></a-cone>
+  </a-entity>
+  <a-entity position="0 65 -120">
+    <a-cone radius-bottom="14" height="18" color="#eeeef5" material="roughness: 0.9; opacity: 0.75; transparent: true" segments-radial="6"></a-cone>
+  </a-entity>
+
+  <!-- === AMBIENT SOUND PLACEHOLDER === -->
+  <!-- Note: Add actual audio file URLs for sound effects -->
+  <!-- <a-sound src="url(forest-ambience.mp3)" autoplay="true" loop="true" volume="0.5" position="0 2 0"></a-sound> -->
+
+</a-scene>
+
+<script>
+  // Show HUD briefly then fade
+  setTimeout(() => {
+    const hud = document.getElementById('hud');
+    hud.style.transition = 'opacity 2s ease';
+    hud.style.opacity = '0.4';
+  }, 8000);
+
+  // Make HUD reappear on hover
+  document.getElementById('hud').addEventListener('mouseenter', () => {
+    document.getElementById('hud').style.opacity = '1';
+  });
+  document.getElementById('hud').addEventListener('mouseleave', () => {
+    document.getElementById('hud').style.opacity = '0.4';
+  });
+</script>
+</body>
+</html>
